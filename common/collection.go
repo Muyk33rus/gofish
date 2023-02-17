@@ -35,8 +35,7 @@ func (c *Collection) UnmarshalJSON(b []byte) error {
 	c.ItemLinks = t.Links.ToStrings()
 
 	// Swordfish has them at the root
-	if len(c.ItemLinks) == 0 &&
-		(t.Count > 0 || t.ODataCount > 0) {
+	if len(c.ItemLinks) == 0 && t.Count > 0 {
 		c.ItemLinks = t.Members.ToStrings()
 	}
 

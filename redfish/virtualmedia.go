@@ -236,12 +236,12 @@ func (virtualmedia *VirtualMedia) InsertMedia(image string, inserted, writeProte
 // VirtualMediaConfig is an struct used to pass config data to build the HTTP body when inserting media
 type VirtualMediaConfig struct {
 	Image                string
-	Inserted             bool   `json:",omitempty"`
+	Inserted             bool
 	Password             string `json:",omitempty"`
 	TransferMethod       string `json:",omitempty"`
 	TransferProtocolType string `json:",omitempty"`
 	UserName             string `json:",omitempty"`
-	WriteProtected       bool   `json:",omitempty"`
+	WriteProtected       bool
 }
 
 // InsertMediaConfig sends a request to insert virtual media using the VirtualMediaConfig struct

@@ -7,7 +7,6 @@ package redfish
 import (
 	"encoding/json"
 	"reflect"
-	"sync"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -405,46 +404,24 @@ func GetMemory(c common.Client, uri string) (*Memory, error) {
 
 // ListReferencedMemorys gets the collection of Memory from
 // a provided reference.
-func ListReferencedMemorys(c common.Client, collectionLink string) ([]*Memory, error) {
+func ListReferencedMemorys(c common.Client, link string) ([]*Memory, error) { //nolint:dupl
 	var result []*Memory
-	if collectionLink == "" {
+	if link == "" {
 		return result, nil
 	}
 
-	links, err := common.GetCollection(c, collectionLink)
+	links, err := common.GetCollection(c, link)
 	if err != nil {
 		return result, err
 	}
 
-	type GetMemoryResult struct {
-		Item  *Memory
-		Link  string
-		Error error
-	}
-
-	ch := make(chan GetMemoryResult)
-	var wg sync.WaitGroup
-
 	collectionError := common.NewCollectionError()
 	for _, memoryLink := range links.ItemLinks {
-		wg.Add(1)
-		go func(link string) {
-			defer wg.Done()
-			memory, err := GetMemory(c, link)
-			ch <- GetMemoryResult{Item: memory, Link: link, Error: err}
-		}(memoryLink)
-	}
-
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-
-	for r := range ch {
-		if r.Error != nil {
-			collectionError.Failures[r.Link] = r.Error
+		memory, err := GetMemory(c, memoryLink)
+		if err != nil {
+			collectionError.Failures[memoryLink] = err
 		} else {
-			result = append(result, r.Item)
+			result = append(result, memory)
 		}
 	}
 

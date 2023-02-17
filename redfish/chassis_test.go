@@ -36,9 +36,6 @@ var chassisBody = `{
 			"State": "Enabled",
 			"Health": "OK"
 		},
-		"Assembly": {
-			"@odata.id": "/redfish/v1/Chassis/Chassis-1/Assembly"
-		},
 		"Drives": {
 			"@odata.id": "/redfish/v1/Chassis/Chassis-1/Drives"
 		},
@@ -149,10 +146,6 @@ func TestChassis(t *testing.T) {
 
 	if result.Status.Health != common.OKHealth {
 		t.Errorf("Received invalid health status: %s", result.Status.Health)
-	}
-
-	if result.assembly != "/redfish/v1/Chassis/Chassis-1/Assembly" {
-		t.Errorf("Received invalid assembly reference: %s", result.assembly)
 	}
 
 	if result.drives != "/redfish/v1/Chassis/Chassis-1/Drives" {

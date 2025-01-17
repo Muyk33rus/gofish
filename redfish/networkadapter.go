@@ -76,9 +76,9 @@ type ControllerCapabilities struct {
 	}
 }
 
-// Controllers shall describe a network controller ASIC that makes up part of a
+// Controller shall describe a network controller ASIC that makes up part of a
 // NetworkAdapter.
-type Controllers struct {
+type Controller struct {
 	// ControllerCapabilities shall contain the capabilities of this controller.
 	ControllerCapabilities ControllerCapabilities
 	// FirmwarePackageVersion shall be the version number of the user-facing
@@ -120,15 +120,15 @@ type Controllers struct {
 }
 
 // UnmarshalJSON unmarshals a Controllers object from the raw JSON.
-func (controllers *Controllers) UnmarshalJSON(b []byte) error {
-	type temp Controllers
+func (controller *Controller) UnmarshalJSON(b []byte) error {
+	type temp Controller
 	type links struct {
 		ActiveSoftwareImage         common.Link
 		NetworkDeviceFunctions      common.Links
 		NetworkDeviceFunctionsCount int `json:"NetworkDeviceFunctions@odata.count"`
 		NetworkPorts                common.Links
 		NetworkPortsCount           int `json:"EthernetInterfaces@odata.count"`
-		PCIeDevice                  common.Link
+		PCIeDevices                 common.Links
 		PCIeDevicesCount            int `json:"PCIeDevices@odata.count"`
 		// Ports shall contain an array of links to resources of type Port that represent the ports associated with this
 		// network controller.
@@ -150,25 +150,25 @@ func (controllers *Controllers) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	// Extract the links to other entities for later
-	*controllers = Controllers(t.temp)
-	controllers.activeSoftwareImage = t.Links.ActiveSoftwareImage.String()
-	controllers.networkDeviceFunctions = t.Links.NetworkDeviceFunctions.ToStrings()
-	controllers.NetworkDeviceFunctionsCount = t.Links.NetworkDeviceFunctionsCount
-	controllers.networkPorts = t.Links.NetworkPorts.ToStrings()
-	controllers.NetworkPortsCount = t.Links.NetworkPortsCount
-	controllers.pcieDevices = t.Links.NetworkDeviceFunctions.ToStrings()
-	controllers.PCIeDevicesCount = t.Links.NetworkDeviceFunctionsCount
-	controllers.ports = t.Links.Ports.ToStrings()
-	controllers.PortsCount = t.Links.PortsCount
-	controllers.softwareImages = t.Links.SoftwareImages.ToStrings()
-	controllers.SoftwareImagesCount = t.Links.SoftwareImagesCount
+	// Extract the links to other entities for late
+	*controller = Controller(t.temp)
+	controller.activeSoftwareImage = t.Links.ActiveSoftwareImage.String()
+	controller.networkDeviceFunctions = t.Links.NetworkDeviceFunctions.ToStrings()
+	controller.NetworkDeviceFunctionsCount = t.Links.NetworkDeviceFunctionsCount
+	controller.networkPorts = t.Links.NetworkPorts.ToStrings()
+	controller.NetworkPortsCount = t.Links.NetworkPortsCount
+	controller.pcieDevices = t.Links.PCIeDevices.ToStrings()
+	controller.PCIeDevicesCount = t.Links.NetworkDeviceFunctionsCount
+	controller.ports = t.Links.Ports.ToStrings()
+	controller.PortsCount = t.Links.PortsCount
+	controller.softwareImages = t.Links.SoftwareImages.ToStrings()
+	controller.SoftwareImagesCount = t.Links.SoftwareImagesCount
 
 	return nil
 }
 
 // ActiveSoftwareImage gets the active firmware image for this network controller.
-func (controllers *Controllers) ActiveSoftwareImage(c common.Client) (*SoftwareInventory, error) {
+func (controllers *Controller) ActiveSoftwareImage(c common.Client) (*SoftwareInventory, error) {
 	if controllers.activeSoftwareImage == "" {
 		return nil, nil
 	}
@@ -176,27 +176,27 @@ func (controllers *Controllers) ActiveSoftwareImage(c common.Client) (*SoftwareI
 }
 
 // NetworkDeviceFunctions gets the collection of NetworkDeviceFunctions of this network controller.
-func (controllers *Controllers) NetworkDeviceFunctions(c common.Client) ([]*NetworkDeviceFunction, error) {
+func (controllers *Controller) NetworkDeviceFunctions(c common.Client) ([]*NetworkDeviceFunction, error) {
 	return common.GetObjects[NetworkDeviceFunction](c, controllers.networkDeviceFunctions)
 }
 
 // NetworkPorts gets the collection of NetworkPorts for this network controller.
-func (controllers *Controllers) NetworkPorts(c common.Client) ([]*NetworkPort, error) {
+func (controllers *Controller) NetworkPorts(c common.Client) ([]*NetworkPort, error) {
 	return common.GetObjects[NetworkPort](c, controllers.networkPorts)
 }
 
 // PCIeDevices gets the PCIe devices associated with this network controller.
-func (controllers *Controllers) PCIeDevices(c common.Client) ([]*PCIeDevice, error) {
+func (controllers *Controller) PCIeDevices(c common.Client) ([]*PCIeDevice, error) {
 	return common.GetObjects[PCIeDevice](c, controllers.pcieDevices)
 }
 
 // Ports gets the ports associated with this network controller.
-func (controllers *Controllers) Ports(c common.Client) ([]*Port, error) {
+func (controllers *Controller) Ports(c common.Client) ([]*Port, error) {
 	return common.GetObjects[Port](c, controllers.ports)
 }
 
 // SoftwareImages gets the firmware images that apply to this controller.
-func (controllers *Controllers) SoftwareImages(c common.Client) ([]*SoftwareInventory, error) {
+func (controllers *Controller) SoftwareImages(c common.Client) ([]*SoftwareInventory, error) {
 	return common.GetObjects[SoftwareInventory](c, controllers.softwareImages)
 }
 
@@ -238,9 +238,9 @@ type NetworkAdapter struct {
 	// Certificates shall contain a link to a resource collection of type CertificateCollection that contains
 	// certificates for device identity and attestation.
 	certificates string
-	// Controllers shall contain the set of network controllers ASICs that make
+	// Controller shall contain the set of network controllers ASICs that make
 	// up this NetworkAdapter.
-	Controllers []Controllers
+	Controllers []*Controller
 	// Description provides a description of this resource.
 	Description string
 	// EnvironmentMetrics shall contain a link to a resource of type EnvironmentMetrics that specifies the environment
@@ -306,6 +306,7 @@ func (networkadapter *NetworkAdapter) UnmarshalJSON(b []byte) error {
 		NetworkPorts           common.Link
 		Ports                  common.Link
 		Processors             common.Link
+		Controllers            []*Controller
 		Actions                actions
 	}
 
@@ -323,7 +324,7 @@ func (networkadapter *NetworkAdapter) UnmarshalJSON(b []byte) error {
 	networkadapter.networkPorts = t.NetworkPorts.String()
 	networkadapter.ports = t.Ports.String()
 	networkadapter.processors = t.Processors.String()
-
+	networkadapter.Controllers = t.Controllers
 	networkadapter.resetSettingsToDefaultTarget = t.Actions.ResetSettingsToDefault.Target
 
 	return nil

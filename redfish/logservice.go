@@ -6,8 +6,8 @@ package redfish
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/stmcginnis/gofish/common"
@@ -64,6 +64,18 @@ const (
 	NeverOverWritesOverWritePolicy OverWritePolicy = "NeverOverWrites"
 )
 
+// DiagnosticDataDetail is the detailed information for a supported CollectDiagnosticData action.
+type DiagnosticDataDetail struct {
+	// DiagnosticDataType indicates the type of diagnostic data to collect.
+	DiagnosticDataType LogDiagnosticDataTypes
+	// EstimatedDuration represents the estimated total time required to generate the data.
+	EstimatedDuration string
+	// EstimatedSizeBytes represents the estimated size of the data to be collected.
+	EstimatedSizeBytes int
+	// OEMDiagnosticDataType represents the type of data if DiagnosticDataType is `OEM`.
+	OEMDiagnosticDataType string
+}
+
 // LogService is used to represent a log service for a Redfish
 // implementation.
 type LogService struct {
@@ -84,6 +96,8 @@ type LogService struct {
 	DateTimeLocalOffset string
 	// Description provides a description of this resource.
 	Description string
+	// DiagnosticDataDetails provides information about the supported CollectDiagnosticData requests
+	DiagnosticDataDetails []DiagnosticDataDetail
 	// Entries shall reference a collection of resources of type LogEntry.
 	entries string
 	// LogEntryType shall represent the
@@ -125,13 +139,19 @@ type LogService struct {
 
 	// clearLogTarget is the URL to send ClearLog actions to.
 	clearLogTarget string
+
+	// collectDiagnosticDataTarget is the URL to send CollectDiagnosticData actions to. (v1.2+)
+	collectDiagnosticDataTarget string
+	// collectDiagnosticInfoTarget is the URL to get ActionInfo about the CollectDiagnosticData action.
+	collectDiagnosticInfoTarget string
 }
 
 // UnmarshalJSON unmarshals a LogService object from the raw JSON.
 func (logservice *LogService) UnmarshalJSON(b []byte) error {
 	type temp LogService
 	type Actions struct {
-		ClearLog common.ActionTarget `json:"#LogService.ClearLog"`
+		ClearLog              common.ActionTarget `json:"#LogService.ClearLog"`
+		CollectDiagnosticData common.ActionTarget `json:"#LogService.CollectDiagnosticData"`
 	}
 	var t struct {
 		temp
@@ -148,6 +168,8 @@ func (logservice *LogService) UnmarshalJSON(b []byte) error {
 	*logservice = LogService(t.temp)
 	logservice.entries = t.Entries.String()
 	logservice.clearLogTarget = t.Actions.ClearLog.Target
+	logservice.collectDiagnosticDataTarget = t.Actions.CollectDiagnosticData.Target
+	logservice.collectDiagnosticInfoTarget = t.Actions.CollectDiagnosticData.ActionInfoTarget
 
 	// This is a read/write object, so we need to save the raw object data for later
 	logservice.rawData = b
@@ -157,14 +179,6 @@ func (logservice *LogService) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (logservice *LogService) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(LogService)
-	err := original.UnmarshalJSON(logservice.rawData)
-	if err != nil {
-		return err
-	}
-
 	readWriteFields := []string{
 		"AutoDSTEnabled",
 		"DateTime",
@@ -172,10 +186,7 @@ func (logservice *LogService) Update() error {
 		"ServiceEnabled",
 	}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(logservice).Elem()
-
-	return logservice.Entity.Update(originalElement, currentElement, readWriteFields)
+	return logservice.UpdateFromRawData(logservice, logservice.rawData, readWriteFields)
 }
 
 // GetLogService will get a LogService instance from the service.
@@ -198,6 +209,11 @@ func (logservice *LogService) FilteredEntries(options ...common.FilterOption) ([
 	var filter common.Filter
 	filter.SetFilter(options...)
 	return ListReferencedLogEntrys(logservice.GetClient(), fmt.Sprintf("%s%s", logservice.entries, filter))
+}
+
+// SupportsClearLog indicates if the ClearLog action is supported.
+func (logservice *LogService) SupportsClearLog() bool {
+	return logservice.clearLogTarget != ""
 }
 
 // ClearLog shall delete all entries found in the Entries collection for this
@@ -233,4 +249,59 @@ func (logservice *LogService) ClearLog() error {
 	}
 
 	return logservice.Post(logservice.clearLogTarget, t)
+}
+
+type CollectDiagnosticDataParameters struct {
+	// DiagnosticDataType (required) shall contain the type of diagnostic data to collect.
+	DiagnosticDataType LogDiagnosticDataTypes `json:",omitempty"`
+	// OEMDiagnosticDataType (optional) shall contain the OEM-defined type of diagnostic data if the
+	// DiagnosticDataType is set to `OEMDiagnosticDataTypes`
+	OEMDiagnosticDataType string `json:",omitempty"`
+	// TargetDevice (optional) is a link to the device to collect diagnostic data from.
+	TargetDevice common.Link `json:",omitempty"`
+	// TargetURI (optional) is the URI to access when sending the diagnostic data.
+	TargetURI string `json:",omitempty"`
+	// UserName (optional) shall contain the username to access the URI specified by `TargetURI`.
+	UserName string `json:",omitempty"`
+	// Password (optional) shall contain the password to access the URI specified by `TargetURI`.
+	Password string `json:",omitempty"`
+	// TransferProtocol is the network protocol to be used to send the diagnostic data.
+	TransferProtocol TransferProtocolType `json:",omitempty"`
+}
+
+// SupportsCollectDiagnosticData indicates if the CollectDiagnosticData action is supported.
+func (logservice *LogService) SupportsCollectDiagnosticData() bool {
+	return logservice.collectDiagnosticDataTarget != ""
+}
+
+// For Redfish v1.2+
+// CollectDiagnosticData shall trigger the generation of a diagnostic data dump.
+// Returns the URI to a LogEntry that will contain the DiagnosticData in the `AdditionalDataURI` when ready.
+// This URI should be polled until the log is generated.
+func (logservice *LogService) CollectDiagnosticData(parameters *CollectDiagnosticDataParameters) (string, error) {
+	if !logservice.SupportsCollectDiagnosticData() {
+		return "", errors.New("CollectDiagnosticsData not supported by this service")
+	}
+
+	resp, err := logservice.PostWithResponse(logservice.collectDiagnosticDataTarget, parameters)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if location := resp.Header["Location"]; len(location) > 0 && location[0] != "" {
+		return location[0], nil
+	}
+
+	return "", nil
+}
+
+// For Redfish v1.2+
+// CollectDiagnosticDataActionInfo, if supported, provides the ActionInfo for a CollectDiagnosticData action.
+func (logservice *LogService) CollectDiagnosticDataActionInfo() (*ActionInfo, error) {
+	if logservice.collectDiagnosticInfoTarget == "" {
+		return nil, errors.New("CollectDiagnosticData ActionInfo not supported by this service")
+	}
+
+	return common.GetObject[ActionInfo](logservice.GetClient(), logservice.collectDiagnosticInfoTarget)
 }

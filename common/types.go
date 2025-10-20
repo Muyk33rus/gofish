@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 // DefaultServiceRoot is the default path to the Redfish service endpoint.
@@ -213,10 +214,11 @@ type Condition struct {
 
 // Status describes the status and health of a resource and its children.
 type Status struct {
-	Health       Health      `json:"Health"`
-	HealthRollup Health      `json:"HealthRollup"`
-	State        State       `json:"State"`
-	Conditions   []Condition `json:"Conditions"`
+	Health       Health          `json:"Health"`
+	HealthRollup Health          `json:"HealthRollup"`
+	State        State           `json:"State"`
+	Conditions   []Condition     `json:"Conditions"`
+	OEM          json.RawMessage `json:"Oem"`
 }
 
 // LocationType shall name the type of location in use.
@@ -356,6 +358,40 @@ type PartLocation struct {
 	Reference Reference
 	// ServiceLabel shall be the label assigned for service at the part location.
 	ServiceLabel string
+}
+
+func (p *PartLocation) UnmarshalJSON(b []byte) error {
+	type temp PartLocation
+	var t struct {
+		temp
+	}
+
+	originalErr := json.Unmarshal(b, &t)
+	if originalErr != nil {
+		// Check if the ordinal is an integer as a string, e.g. "1" instead of 1.
+		var stringT struct {
+			temp
+			LocationOrdinalValue string
+		}
+		err := json.Unmarshal(b, &stringT)
+		if err != nil {
+			return err
+		}
+		i, err := strconv.Atoi(stringT.LocationOrdinalValue)
+		if err != nil {
+			return originalErr
+		}
+		p.LocationOrdinalValue = i
+		p.LocationType = stringT.LocationType
+		p.Orientation = stringT.Orientation
+		p.Reference = stringT.Reference
+		p.ServiceLabel = stringT.ServiceLabel
+
+		return nil
+	}
+
+	*p = PartLocation(t.temp)
+	return nil
 }
 
 // Placement shall describe a location within a resource. Examples include a
@@ -499,19 +535,18 @@ type Resource struct {
 
 // ResourceCollection is
 type ResourceCollection struct {
+	Entity
 	// ODataContext is the odata context.
 	ODataContext string `json:"@odata.context"`
-	// ODataID is the odata identifier.
-	ODataID string `json:"@odata.id"`
+	// ODataEtag is the odata etag.
+	ODataEtag string `json:"@odata.etag"`
 	// ODataType is the odata type.
 	ODataType string `json:"@odata.type"`
 	// Description provides a description of this resource.
 	Description string
-	// Name is the name of this resource
-	Name string
 	// Oem is The value of this string shall be of the format for the
 	// reserved word *Oem*.
-	OEM string `json:"Oem"`
+	OEM json.RawMessage `json:"Oem"`
 }
 
 // Operations shall describe a currently running operation on the resource.
@@ -726,4 +761,7 @@ type ErrExtendedInfo struct {
 // ActionTarget is contains the target endpoint for object Actions.
 type ActionTarget struct {
 	Target string
+	// ActionInfoTarget is an optional resource that provides information about parameters
+	// that are supported by the associated Target.
+	ActionInfoTarget string `json:"@Redfish.ActionInfo"`
 }

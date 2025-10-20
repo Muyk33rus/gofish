@@ -121,10 +121,6 @@ func setupClientWithConfig(ctx context.Context, config *ClientConfig) (c *APICli
 		client.sem = make(chan bool, config.MaxConcurrentRequests)
 	}
 
-	if config.TLSHandshakeTimeout == 0 {
-		config.TLSHandshakeTimeout = 10
-	}
-
 	if config.HTTPClient == nil {
 		defaultTransport := http.DefaultTransport.(*http.Transport)
 		transport := &http.Transport{
@@ -133,21 +129,42 @@ func setupClientWithConfig(ctx context.Context, config *ClientConfig) (c *APICli
 			MaxIdleConns:          defaultTransport.MaxIdleConns,
 			IdleConnTimeout:       defaultTransport.IdleConnTimeout,
 			ExpectContinueTimeout: defaultTransport.ExpectContinueTimeout,
+			TLSClientConfig:       defaultTransport.TLSClientConfig,
 			TLSHandshakeTimeout:   time.Duration(config.TLSHandshakeTimeout) * time.Second,
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: config.Insecure,
-			},
+		}
+
+		config.HTTPClient = &http.Client{Transport: transport}
+	}
+
+	client.HTTPClient = config.HTTPClient
+
+	// if the provided HTTPClient uses a standard Transport, we want to
+	// amend its configuration to match what was provided to us
+	if transport, ok := client.HTTPClient.Transport.(*http.Transport); ok {
+		if config.Insecure {
+			// If we're using the default transport, need to make sure there
+			// is a TLSClientConfig set in order to set the SkipVerify flag.
+			if transport.TLSClientConfig == nil {
+				transport.TLSClientConfig = &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+			}
+			transport.TLSClientConfig.InsecureSkipVerify = config.Insecure
 		}
 
 		if config.ReuseConnections {
-			client.keepAlive = true
 			transport.DisableKeepAlives = false
 			transport.IdleConnTimeout = 1 * time.Minute
 		}
 
-		client.HTTPClient = &http.Client{Transport: transport}
-	} else {
-		client.HTTPClient = config.HTTPClient
+		if config.TLSHandshakeTimeout != 0 {
+			transport.TLSHandshakeTimeout = time.Duration(config.TLSHandshakeTimeout) * time.Second
+		}
+	}
+
+	// Allow provided HTTPClients that don't use the standard Transport to reuse connections.
+	if config.ReuseConnections {
+		client.keepAlive = true
 	}
 
 	// Fetch the service root
@@ -251,9 +268,16 @@ func (c *APIClient) GetService() *Service {
 	return c.Service
 }
 
+// WithContext returns a copy of the client using the provided context
+func (c *APIClient) WithContext(ctx context.Context) *APIClient {
+	newClient := *c
+	newClient.ctx = ctx
+	return &newClient
+}
+
 // CloneWithSession will create a new Client with a session instead of basic auth.
 func (c *APIClient) CloneWithSession() (*APIClient, error) {
-	if c.auth.Session != "" {
+	if c.auth != nil && c.auth.Session != "" {
 		return nil, fmt.Errorf("client already has a session")
 	}
 
@@ -593,6 +617,12 @@ func (c *APIClient) dumpResponse(resp *http.Response) error {
 // a new connection.
 func (c *APIClient) Logout() {
 	if c != nil && c.Service != nil && c.auth != nil {
+		// if APIClient is created with ConnectContext (f.e. with http request ctx)
+		// and passed context is cancelled (f.e. downstream request is aborted),
+		// we need to create a new context to clean up Redfish API session
+		if c.ctx.Err() != nil {
+			c.ctx = context.Background()
+		}
 		if err := c.Service.DeleteSession(c.auth.Session); err == nil {
 			// Clean up invalid session token and ID upon successful Logout
 			c.auth.Session = ""

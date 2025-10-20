@@ -7,7 +7,6 @@ package redfish
 import (
 	"encoding/json"
 	"errors"
-	"reflect"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -153,8 +152,8 @@ type PowerSupplyUnit struct {
 	// It is vendor responsibility to parse this field accordingly
 	OemActions json.RawMessage
 
-	// rawData holds the original serialized JSON so we can compare updates.
-	rawData []byte
+	// RawData holds the original serialized JSON so we can compare updates.
+	RawData []byte
 }
 
 // UnmarshalJSON unmarshals a PowerSupplyUnit object from the raw JSON.
@@ -202,31 +201,20 @@ func (powerSupplyUnit *PowerSupplyUnit) UnmarshalJSON(b []byte) error {
 	powerSupplyUnit.OemActions = t.Actions.Oem
 
 	// This is a read/write object, so we need to save the raw object data for later
-	powerSupplyUnit.rawData = b
+	powerSupplyUnit.RawData = b
 
 	return nil
 }
 
 // Update commits updates to this object's properties to the running system.
 func (powerSupplyUnit *PowerSupplyUnit) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	psu := new(PowerSupplyUnit)
-	err := psu.UnmarshalJSON(powerSupplyUnit.rawData)
-	if err != nil {
-		return err
-	}
-
 	readWriteFields := []string{
 		"ElectricalSourceManagerURIs",
 		"ElectricalSourceNames",
 		"LocationIndicatorActive",
 	}
 
-	originalElement := reflect.ValueOf(psu).Elem()
-	currentElement := reflect.ValueOf(powerSupplyUnit).Elem()
-
-	return powerSupplyUnit.Entity.Update(originalElement, currentElement, readWriteFields)
+	return powerSupplyUnit.UpdateFromRawData(powerSupplyUnit, powerSupplyUnit.RawData, readWriteFields)
 }
 
 // GetPowerSupplyUnit will get a PowerSupplyUnit instance from the Redfish service.

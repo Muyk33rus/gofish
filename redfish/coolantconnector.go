@@ -6,7 +6,6 @@ package redfish
 
 import (
 	"encoding/json"
-	"reflect"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -95,7 +94,7 @@ type CoolantConnector struct {
 	// of type Sensor with the ReadingType property containing the value 'Temperature'.
 	ReturnTemperatureCelsius SensorExcerpt
 	// ReturnTemperatureControlCelsius contain the control for the desired return temperature, in degree Celsius units
-	// for this coolant connector. This control shall only be present for the secondary coolant connector.
+	// for this coolant connector.
 	ReturnTemperatureControlCelsius ControlSingleExcerpt
 	// Status shall contain any status or health properties of the resource.
 	Status common.Status
@@ -107,9 +106,13 @@ type CoolantConnector struct {
 	// connection to the cooling loop. The value of the DataSourceUri property, if present, shall reference a resource
 	// of type Sensor with the ReadingType property containing the value 'Temperature'.
 	SupplyTemperatureCelsius SensorExcerpt
-	// SupplyTemperatureControlCelsius contain the control for the desired supply temperature, in degree Celsius units
-	// of this coolant connector. This control shall only be present for the secondary coolant connector.
+	// SupplyTemperatureControlCelsius contain the control for the desired supply temperature in degree Celsius units
+	// of this coolant connector.
 	SupplyTemperatureControlCelsius ControlSingleExcerpt
+	// ValvePositionControlPercent contain the control for the desired valve position (% open) of this connector.
+	ValvePositionControlPercent ControlSingleExcerpt
+	// ValvePositionPercent the valve position (percent open) of this connector.
+	ValvePositionPercent SensorExcerpt
 	// rawData holds the original serialized JSON so we can compare updates.
 	rawData          []byte
 	connectedChassis []string
@@ -161,11 +164,6 @@ func (coolantconnector *CoolantConnector) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (coolantconnector *CoolantConnector) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(CoolantConnector)
-	original.UnmarshalJSON(coolantconnector.rawData)
-
 	readWriteFields := []string{
 		"CoolingLoopName",
 		"CoolingManagerURI",
@@ -177,10 +175,7 @@ func (coolantconnector *CoolantConnector) Update() error {
 		"SupplyTemperatureControlCelsius",
 	}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(coolantconnector).Elem()
-
-	return coolantconnector.Entity.Update(originalElement, currentElement, readWriteFields)
+	return coolantconnector.UpdateFromRawData(coolantconnector, coolantconnector.rawData, readWriteFields)
 }
 
 // GetCoolantConnector will get a CoolantConnector instance from the service.

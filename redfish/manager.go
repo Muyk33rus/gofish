@@ -6,8 +6,8 @@ package redfish
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -382,8 +382,10 @@ type Manager struct {
 	// resetInfo contains URI for an ActionInfo Resource that describes this action.
 	actionInfo string
 	// SupportedResetTypes, if provided, is the reset types this system supports.
-	SupportedResetTypes   []ResetType
-	resetToDefaultsTarget string
+	SupportedResetTypes             []ResetType
+	resetToDefaultsTarget           string
+	resetToDefaultsActionInfoTarget string
+	SupportedResetToDefaultsTypes   []ResetToDefaultsType
 	// RawData holds the original serialized JSON so we can compare updates.
 	RawData []byte
 }
@@ -395,11 +397,13 @@ func (manager *Manager) UnmarshalJSON(b []byte) error {
 		ForceFailover       common.ActionTarget `json:"#Manager.ForceFailover"`
 		ModifyRedundancySet common.ActionTarget `json:"#Manager.ModifyRedundancySet"`
 		Reset               struct {
-			ActionInfo        string      `json:"@Redfish.ActionInfo"`
+			common.ActionTarget
 			AllowedResetTypes []ResetType `json:"ResetType@Redfish.AllowableValues"`
-			Target            string
 		} `json:"#Manager.Reset"`
-		ResetToDefaults common.ActionTarget `json:"#Manager.ResetToDefaults"`
+		ResetToDefaults struct {
+			common.ActionTarget
+			AllowedResetTypes []ResetToDefaultsType `json:"ResetType@Redfish.AllowableValues"`
+		} `json:"#Manager.ResetToDefaults"`
 
 		Oem json.RawMessage
 	}
@@ -481,8 +485,10 @@ func (manager *Manager) UnmarshalJSON(b []byte) error {
 	manager.modifyRedundancySetTarget = t.Actions.ModifyRedundancySet.Target
 	manager.SupportedResetTypes = t.Actions.Reset.AllowedResetTypes
 	manager.resetTarget = t.Actions.Reset.Target
+	manager.SupportedResetToDefaultsTypes = t.Actions.ResetToDefaults.AllowedResetTypes
 	manager.resetToDefaultsTarget = t.Actions.ResetToDefaults.Target
-	manager.actionInfo = t.Actions.Reset.ActionInfo
+	manager.resetToDefaultsActionInfoTarget = t.Actions.ResetToDefaults.ActionInfoTarget
+	manager.actionInfo = t.Actions.Reset.ActionInfoTarget
 
 	// This is a read/write object, so we need to save the raw object data for later
 	manager.RawData = b
@@ -492,14 +498,6 @@ func (manager *Manager) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (manager *Manager) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(Manager)
-	err := original.UnmarshalJSON(manager.RawData)
-	if err != nil {
-		return err
-	}
-
 	readWriteFields := []string{
 		"AutoDSTEnabled",
 		"DateTime",
@@ -509,10 +507,7 @@ func (manager *Manager) Update() error {
 		"TimeZoneName",
 	}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(manager).Elem()
-
-	return manager.Entity.Update(originalElement, currentElement, readWriteFields)
+	return manager.UpdateFromRawData(manager, manager.RawData, readWriteFields)
 }
 
 // GetManager will get a Manager instance from the Swordfish service.
@@ -544,6 +539,42 @@ func (manager *Manager) ModifyRedundancySet(addManagers, removeManagers []*Manag
 		Remove: removeManagers,
 	}
 	return manager.Post(manager.modifyRedundancySetTarget, parameters)
+}
+
+// GetSupportedResetTypes returns any reset types that the Manager declares as supported
+// via either ActionInfo or AllowableValues.
+func (manager *Manager) GetSupportedResetTypes() ([]ResetType, error) {
+	if len(manager.SupportedResetTypes) > 0 {
+		return manager.SupportedResetTypes, nil
+	}
+
+	// if we don't have ResetTypes, try to get from ActionInfo
+	if manager.actionInfo != "" {
+		resetActionInfo, err := manager.ResetActionInfo()
+		if err != nil {
+			return nil, err
+		}
+
+		vals, err := resetActionInfo.GetParamValues("ResetType", StringActionInfoDataTypes)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, val := range vals {
+			manager.SupportedResetTypes = append(manager.SupportedResetTypes, ResetType(val))
+		}
+	}
+
+	return manager.SupportedResetTypes, nil
+}
+
+// ResetActionInfo returns the ActionInfo for the Manager reset action if supported
+func (manager *Manager) ResetActionInfo() (*ActionInfo, error) {
+	if manager.actionInfo == "" {
+		return nil, errors.New("Manager Reset ActionInfo not supported")
+	}
+
+	return common.GetObject[ActionInfo](manager.GetClient(), manager.actionInfo)
 }
 
 // Reset shall perform a reset of the manager.
@@ -578,6 +609,42 @@ func (manager *Manager) Reset(resetType ResetType) error {
 		ResetType ResetType
 	}{ResetType: resetType}
 	return manager.Post(manager.resetTarget, t)
+}
+
+// GetSupportedResetToDefaultsTypes returns any reset to defaults
+// types that the Manager declares as supported via either ActionInfo or AllowableValues.
+func (manager *Manager) GetSupportedResetToDefaultsTypes() ([]ResetToDefaultsType, error) {
+	if len(manager.SupportedResetToDefaultsTypes) > 0 {
+		return manager.SupportedResetToDefaultsTypes, nil
+	}
+
+	// if we don't have ResetTypes, try to get from ActionInfo
+	if manager.resetToDefaultsActionInfoTarget != "" {
+		resetActionInfo, err := manager.ResetToDefaultsActionInfo()
+		if err != nil {
+			return nil, err
+		}
+
+		vals, err := resetActionInfo.GetParamValues("ResetType", StringActionInfoDataTypes)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, val := range vals {
+			manager.SupportedResetToDefaultsTypes = append(manager.SupportedResetToDefaultsTypes, ResetToDefaultsType(val))
+		}
+	}
+
+	return manager.SupportedResetToDefaultsTypes, nil
+}
+
+// ResetToDefaultsActionInfo returns the ActionInfo for the Manager ResetToDefaults action if supported
+func (manager *Manager) ResetToDefaultsActionInfo() (*ActionInfo, error) {
+	if manager.resetToDefaultsActionInfoTarget == "" {
+		return nil, errors.New("Manager ResetToDefaults ActionInfo not supported")
+	}
+
+	return common.GetObject[ActionInfo](manager.GetClient(), manager.resetToDefaultsActionInfoTarget)
 }
 
 // ResetToDefaults resets the manager settings to factory defaults. This can cause the manager to reset.

@@ -6,7 +6,6 @@ package redfish
 
 import (
 	"encoding/json"
-	"reflect"
 	"strconv"
 
 	"github.com/stmcginnis/gofish/common"
@@ -407,6 +406,7 @@ type Processor struct {
 	// (v1.9+) The state of the base frequency settings of
 	// the operation configuration applied to this processor.
 	BaseSpeedPriorityState BaseSpeedPriorityState
+	cacheMemory            string
 	certificates           []string
 	// Description provides a description of this resource.
 	Description string
@@ -453,6 +453,9 @@ type Processor struct {
 	// Model shall indicate the model information as
 	// provided by the manufacturer of this processor.
 	Model string
+	// Oem shall contain the OEM extensions. All values for properties that this object contains shall conform to the
+	// Redfish Specification-described requirements.
+	OEM json.RawMessage `json:"Oem"`
 	// (v1.9+) The link to the collection operating configurations
 	// that can be applied to this processor.
 	operatingConfigs []string
@@ -608,6 +611,7 @@ func (processor *Processor) UnmarshalJSON(b []byte) error {
 		AppliedOperatingConfig common.Link
 		Assembly               common.Link
 		Certificates           common.LinksCollection
+		CacheMemory            common.Link
 		EnvironmentMetrics     common.Link
 		Metrics                common.Link
 		OperatingConfigs       common.LinksCollection
@@ -658,6 +662,7 @@ func (processor *Processor) UnmarshalJSON(b []byte) error {
 	processor.accelerationFunctions = t.AccelerationFunctions.ToStrings()
 	processor.appliedOperatingConfig = t.AppliedOperatingConfig.String()
 	processor.assembly = t.Assembly.String()
+	processor.cacheMemory = t.CacheMemory.String()
 	processor.certificates = t.Certificates.ToStrings()
 	processor.environmentMetrics = t.EnvironmentMetrics.String()
 	processor.metrics = t.Metrics.String()
@@ -692,24 +697,14 @@ func (processor *Processor) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (processor *Processor) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(Processor)
-	original.UnmarshalJSON(processor.rawData)
-
-	readWriteFields := []string{
-		"AppliedOperatingConfig",
+	readWriteFields := []string{"AppliedOperatingConfig",
 		"Enabled",
 		"LocationIndicatorActive",
 		"OperatingSpeedRangeMHz",
 		"SpeedLimitMHz",
-		"SpeedLocked",
-	}
+		"SpeedLocked"}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(processor).Elem()
-
-	return processor.Entity.Update(originalElement, currentElement, readWriteFields)
+	return processor.UpdateFromRawData(processor, processor.rawData, readWriteFields)
 }
 
 // Reset resets the processor.
@@ -746,6 +741,13 @@ func (processor *Processor) Assembly() (*Assembly, error) {
 		return nil, nil
 	}
 	return GetAssembly(processor.GetClient(), processor.assembly)
+}
+
+func (processor *Processor) CacheMemory() ([]*Memory, error) {
+	if processor.cacheMemory == "" {
+		return nil, nil
+	}
+	return ListReferencedMemorys(processor.GetClient(), processor.cacheMemory)
 }
 
 // Certificates gets the certificates for device identity and attestation.

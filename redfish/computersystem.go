@@ -6,8 +6,8 @@ package redfish
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/stmcginnis/gofish/common"
@@ -511,7 +511,8 @@ type Boot struct {
 	// boot from the UEFI BootOptionReference found in BootNext. Changes to
 	// this property do not alter the BIOS persistent boot order
 	// configuration.
-	BootSourceOverrideTarget BootSourceOverrideTarget `json:",omitempty"`
+	BootSourceOverrideTarget                BootSourceOverrideTarget   `json:",omitempty"`
+	AllowableBootSourceOverrideTargetValues []BootSourceOverrideTarget `json:"BootSourceOverrideTarget@Redfish.AllowableValues,omitempty"`
 	// The link to a collection of certificates used for booting through HTTPS by this computer system.
 	certificates string
 	// The URI to boot from when BootSourceOverrideTarget is set to UefiHttp.
@@ -532,7 +533,8 @@ type Boot struct {
 	// for UEFI Boot Source Override as this setting is defined in UEFI as a
 	// one time boot only. Changes to this property do not alter the BIOS
 	// persistent boot order configuration.
-	UefiTargetBootSourceOverride string `json:",omitempty"`
+	UefiTargetBootSourceOverride                string   `json:",omitempty"`
+	AllowableUefiTargetBootSourceOverrideValues []string `json:"UefiTargetBootSourceOverride@Redfish.AllowableValues,omitempty"`
 }
 
 // UnmarshalJSON unmarshals a Boot object from the raw JSON.
@@ -623,7 +625,7 @@ const (
 	// ForceRestartResetType shall be used to restart the machine without wait the OS to shutdown
 	ForceRestartResetType ResetType = "ForceRestart"
 	// FullPowerCycleResetType shall be used to perform an AC power cycle
-	FullPowerCycleResetType
+	FullPowerCycleResetType ResetType = "FullPowerCycle"
 	// GracefulRestartResetType shall be used to restart the machine waiting the OS shutdown gracefully
 	GracefulRestartResetType ResetType = "GracefulRestart"
 	// GracefulShutdownResetType shall be used to restart the machine waiting the OS shutdown gracefully
@@ -930,6 +932,8 @@ type ComputerSystem struct {
 	removeResourceBlockTarget string
 	// resetTarget is the internal URL to send reset targets to.
 	resetTarget string
+	// resetActionInfoTarget is the URL to check what values are supported
+	resetActionInfoTarget string
 	// setDefaultBootOrderTarget is the URL to send SetDefaultBootOrder actions to.
 	setDefaultBootOrderTarget string
 	settingsTarget            string
@@ -944,8 +948,8 @@ func (computersystem *ComputerSystem) UnmarshalJSON(b []byte) error {
 		Decommission        common.ActionTarget `json:"#ComputerSystem.Decommission"`
 		RemoveResourceBlock common.ActionTarget `json:"#ComputerSystem.RemoveResourceBlock"`
 		Reset               struct {
+			common.ActionTarget
 			AllowedResetTypes []ResetType `json:"ResetType@Redfish.AllowableValues"`
-			Target            string
 		} `json:"#ComputerSystem.Reset"`
 		SetDefaultBootOrder common.ActionTarget `json:"#ComputerSystem.SetDefaultBootOrder"`
 	}
@@ -1009,6 +1013,7 @@ func (computersystem *ComputerSystem) UnmarshalJSON(b []byte) error {
 	computersystem.decommissionTarget = t.Actions.Decommission.Target
 	computersystem.removeResourceBlockTarget = t.Actions.RemoveResourceBlock.Target
 	computersystem.resetTarget = t.Actions.Reset.Target
+	computersystem.resetActionInfoTarget = t.Actions.Reset.ActionInfoTarget
 	computersystem.SupportedResetTypes = t.Actions.Reset.AllowedResetTypes
 	computersystem.setDefaultBootOrderTarget = t.Actions.SetDefaultBootOrder.Target
 
@@ -1031,14 +1036,6 @@ func (computersystem *ComputerSystem) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (computersystem *ComputerSystem) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	cs := new(ComputerSystem)
-	err := cs.UnmarshalJSON(computersystem.RawData)
-	if err != nil {
-		return err
-	}
-
 	readWriteFields := []string{
 		"AssetTag",
 		"HostName",
@@ -1051,10 +1048,7 @@ func (computersystem *ComputerSystem) Update() error {
 		"IndicatorLED",
 	}
 
-	originalElement := reflect.ValueOf(cs).Elem()
-	currentElement := reflect.ValueOf(computersystem).Elem()
-
-	return computersystem.Entity.Update(originalElement, currentElement, readWriteFields)
+	return computersystem.UpdateFromRawData(computersystem, computersystem.RawData, readWriteFields)
 }
 
 // GetComputerSystem will get a ComputerSystem instance from the service.
@@ -1186,6 +1180,42 @@ func (computersystem *ComputerSystem) Reset(resetType ResetType) error {
 	}{ResetType: resetType}
 
 	return computersystem.Post(computersystem.resetTarget, t)
+}
+
+// GetSupportedResetTypes returns any reset types that the ComputerSystem declares as supported
+// via either ActionInfo or AllowableValues.
+func (computersystem *ComputerSystem) GetSupportedResetTypes() ([]ResetType, error) {
+	if len(computersystem.SupportedResetTypes) > 0 {
+		return computersystem.SupportedResetTypes, nil
+	}
+
+	// if we don't have ResetTypes, try to get from ActionInfo
+	if computersystem.resetActionInfoTarget != "" {
+		resetActionInfo, err := computersystem.ResetActionInfo()
+		if err != nil {
+			return nil, err
+		}
+
+		vals, err := resetActionInfo.GetParamValues("ResetType", StringActionInfoDataTypes)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, val := range vals {
+			computersystem.SupportedResetTypes = append(computersystem.SupportedResetTypes, ResetType(val))
+		}
+	}
+
+	return computersystem.SupportedResetTypes, nil
+}
+
+// ResetActionInfo returns the ActionInfo for the ComputerSystem reset action if supported
+func (computersystem *ComputerSystem) ResetActionInfo() (*ActionInfo, error) {
+	if computersystem.resetActionInfoTarget == "" {
+		return nil, errors.New("ComputerSystem Reset ActionInfo not supported")
+	}
+
+	return common.GetObject[ActionInfo](computersystem.GetClient(), computersystem.resetActionInfoTarget)
 }
 
 // UpdateBootAttributesApplyAt is used to update attribute values and set apply time together
@@ -1326,6 +1356,9 @@ type CSLinks struct {
 type MemorySummary struct {
 	// MemoryMirroring is the ability and type of memory mirroring supported by this system.
 	MemoryMirroring MemoryMirroring
+	// Metrics shall be a reference to the Metrics
+	// associated with this MemorySummary.
+	metrics string
 	// Status is the status or health properties of the resource.
 	Status common.Status
 	// TotalSystemMemoryGiB is the amount of configured system general purpose
@@ -1334,6 +1367,34 @@ type MemorySummary struct {
 	// TotalSystemPersistentMemoryGiB is the total amount of configured
 	// persistent memory available to the system as measured in gibibytes.
 	TotalSystemPersistentMemoryGiB float32
+}
+
+func (memorySummary *MemorySummary) UnmarshalJSON(b []byte) error {
+	type temp MemorySummary
+	type t1 struct {
+		temp
+		Metrics common.Link
+	}
+	var t t1
+
+	err := json.Unmarshal(b, &t)
+	if err != nil {
+		return err
+	}
+
+	*memorySummary = MemorySummary(t.temp)
+
+	memorySummary.metrics = t.Metrics.String()
+
+	return nil
+}
+
+// Metrics gets the memory summary metrics
+func (memorySummary *MemorySummary) Metrics(c common.Client) (*MemoryMetrics, error) {
+	if memorySummary.metrics == "" {
+		return nil, nil
+	}
+	return GetMemoryMetrics(c, memorySummary.metrics)
 }
 
 // ProcessorSummary is This type shall contain properties which describe

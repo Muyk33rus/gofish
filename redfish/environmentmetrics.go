@@ -7,7 +7,6 @@ package redfish
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -50,6 +49,9 @@ type EnvironmentMetrics struct {
 	// property, if present, shall reference a resource of type Sensor with the ReadingType property containing the
 	// value 'Humidity'.
 	HumidityPercent SensorExcerpt
+	// Oem shall contain the OEM extensions. All values for properties that this object contains shall conform to the
+	// Redfish Specification-described requirements.
+	OEM json.RawMessage `json:"Oem"`
 	// PowerLimitWatts shall contain the power limit control, in watt units, for this resource. The value of the
 	// DataSourceUri property, if present, shall reference a resource of type Control with the ControlType property
 	// containing the value of 'Power'.
@@ -122,19 +124,11 @@ func (environmentmetrics *EnvironmentMetrics) ResetToDefaults() error {
 
 // Update commits updates to this object's properties to the running system.
 func (environmentmetrics *EnvironmentMetrics) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(EnvironmentMetrics)
-	original.UnmarshalJSON(environmentmetrics.rawData)
-
 	readWriteFields := []string{
 		"PowerLimitWatts",
 	}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(environmentmetrics).Elem()
-
-	return environmentmetrics.Entity.Update(originalElement, currentElement, readWriteFields)
+	return environmentmetrics.UpdateFromRawData(environmentmetrics, environmentmetrics.rawData, readWriteFields)
 }
 
 // GetEnvironmentMetrics will get a EnvironmentMetrics instance from the service.

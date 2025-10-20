@@ -6,13 +6,16 @@ package redfish
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/stmcginnis/gofish/common"
 )
 
-var logServiceBody = `{
+var logServiceBodyTmpl = `{
 		"@odata.context": "/redfish/v1/$metadata#LogService.LogService",
 		"@odata.type": "#LogService.v1_0_0.LogService",
 		"@odata.id": "/redfish/v1/LogService",
@@ -34,9 +37,17 @@ var logServiceBody = `{
 		"Actions": {
 			"#LogService.ClearLog": {
 				"target": "/redfish/v1/Managers/BMC/LogServices/Log/Actions/LogService.ClearLog"
-			}
+			}%s
 		}
 	}`
+
+var logServiceBody = fmt.Sprintf(logServiceBodyTmpl, `
+	, "#LogService.CollectDiagnosticData": {
+		"target": "/redfish/v1/Managers/BMC/LogServices/Log/Actions/LogService.CollectDiagnosticData",
+		"@Redfish.ActionInfo": "/redfish/v1/Managers/BMC/LogServices/Log/CollectDiagnosticDataActionInfo"
+	}
+`)
+var logServiceBodyNoDiag = fmt.Sprintf(logServiceBodyTmpl, "")
 
 // TestLogService tests the parsing of LogService objects.
 func TestLogService(t *testing.T) {
@@ -78,12 +89,19 @@ func TestLogService(t *testing.T) {
 	if result.clearLogTarget != "/redfish/v1/Managers/BMC/LogServices/Log/Actions/LogService.ClearLog" {
 		t.Errorf("Invalid ClearLog target: %s", result.clearLogTarget)
 	}
+
+	if result.collectDiagnosticDataTarget != "/redfish/v1/Managers/BMC/LogServices/Log/Actions/LogService.CollectDiagnosticData" {
+		t.Errorf("Invalid CollectDiagnosticData target: %s", result.collectDiagnosticDataTarget)
+	}
+
+	if result.collectDiagnosticInfoTarget != "/redfish/v1/Managers/BMC/LogServices/Log/CollectDiagnosticDataActionInfo" {
+		t.Errorf("Invalid CollectDiagnosticData ActionInfo target: %s", result.collectDiagnosticInfoTarget)
+	}
 }
 
-// TestLogServiceUpdate tests the Update call.
-func TestLogServiceUpdate(t *testing.T) {
+func initLogServiceClient(t *testing.T, template string) (*LogService, *common.TestClient) {
 	var result LogService
-	err := json.NewDecoder(strings.NewReader(logServiceBody)).Decode(&result)
+	err := json.NewDecoder(strings.NewReader(template)).Decode(&result)
 
 	if err != nil {
 		t.Errorf("Error decoding JSON: %s", err)
@@ -91,9 +109,15 @@ func TestLogServiceUpdate(t *testing.T) {
 
 	testClient := &common.TestClient{}
 	result.SetClient(testClient)
+	return &result, testClient
+}
+
+// TestLogServiceUpdate tests the Update call.
+func TestLogServiceUpdate(t *testing.T) {
+	result, testClient := initLogServiceClient(t, logServiceBody)
 
 	result.ServiceEnabled = false
-	err = result.Update()
+	err := result.Update()
 
 	if err != nil {
 		t.Errorf("Error making Update call: %s", err)
@@ -104,4 +128,84 @@ func TestLogServiceUpdate(t *testing.T) {
 	if !strings.Contains(calls[0].Payload, "ServiceEnabled:false") {
 		t.Errorf("Unexpected ServiceEnabled update payload: %s", calls[0].Payload)
 	}
+}
+
+// TestLogServiceCollectDiagnosticsDataSuccess
+func TestLogServiceCollectDiagnosticsDataSuccess(t *testing.T) {
+	logSvc, testClient := initLogServiceClient(t, logServiceBody)
+
+	if !logSvc.SupportsCollectDiagnosticData() {
+		t.Errorf("Log service doesn't support diagnostic data")
+	}
+
+	diagnosticLocation := "/redfish/v1/Managers/BMC/LogServices/Log/Entries/10"
+
+	testClient.CustomReturnForActions = map[string][]interface{}{
+		http.MethodPost: []interface{}{
+			&http.Response{
+				StatusCode: http.StatusCreated,
+				Header: http.Header{
+					"Location": []string{diagnosticLocation},
+				},
+				Body: io.NopCloser(strings.NewReader(`
+				{
+					"error": {
+						"code": "Base.1.12.Success",
+						"message": "Successfully Completed Request",
+						"@Message.ExtendedInfo": [
+							{
+								"MessageId": "Base.1.12.Success",
+								"Message": "Successfully Completed Request",
+								"MessageSeverity": "OK",
+								"Resolution": "None",
+								"@odata.type": "#Message.v1_1_2.Message"
+							}
+						]
+					}
+				}
+			`)),
+			},
+		}}
+
+	location, err := logSvc.CollectDiagnosticData(&CollectDiagnosticDataParameters{
+		DiagnosticDataType: ManagerLogDiagnosticDataTypes,
+	})
+	if err != nil {
+		t.Errorf("Error triggering diagnostic data: %s", err)
+	}
+
+	assertEquals(t, diagnosticLocation, location)
+}
+
+// TestLogServiceCollectDiagnosticsDataUnsupported
+func TestLogServiceCollectionDiagnosticsDataUnsupported(t *testing.T) {
+	logSvc, _ := initLogServiceClient(t, logServiceBodyNoDiag)
+
+	if logSvc.SupportsCollectDiagnosticData() {
+		t.Errorf("log service unexpectedly supports diagnostic data")
+	}
+}
+
+func TestLogServiceCollectDiagnosticsActionInfo(t *testing.T) {
+	logSvc, testClient := initLogServiceClient(t, logServiceBody)
+
+	testClient.CustomReturnForActions = map[string][]interface{}{
+		http.MethodGet: {
+			&http.Response{
+				StatusCode: http.StatusOK,
+				// just the example ActionInfo from DSP0268 6.3.4
+				Body: io.NopCloser(strings.NewReader(actionInfoBody)),
+			},
+		}}
+
+	actionInfo, err := logSvc.CollectDiagnosticDataActionInfo()
+	if err != nil {
+		t.Errorf("Error getting diagnostic action info: %s", err)
+	}
+
+	if actionInfo.ODataType != "#ActionInfo.v1_4_2.ActionInfo" {
+		t.Errorf("Invalid action info type: %s", actionInfo.ODataType)
+	}
+
+	// not thoroughly testing the ActionInfo parsing - that will be handled in its own unit test
 }

@@ -6,8 +6,8 @@ package redfish
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/stmcginnis/gofish/common"
 )
@@ -373,6 +373,8 @@ type Chassis struct {
 
 	// resetTarget is the internal URL to send reset actions to.
 	resetTarget string
+	// resetActionInfoTarget is the URL to check what values are supported
+	resetActionInfoTarget string
 	// SupportedResetTypes, if provided, is the reset types this chassis supports.
 	SupportedResetTypes []ResetType
 
@@ -460,8 +462,8 @@ type chassisLinks struct {
 
 type chassisActions struct {
 	ChassisReset struct {
+		common.ActionTarget
 		AllowedResetTypes []ResetType `json:"ResetType@Redfish.AllowableValues"`
-		Target            string
 	} `json:"#Chassis.Reset"`
 }
 
@@ -526,6 +528,7 @@ func (chassis *Chassis) UnmarshalJSON(b []byte) error {
 	chassis.trustedComponents = t.TrustedComponents.String()
 
 	chassis.resetTarget = t.Actions.ChassisReset.Target
+	chassis.resetActionInfoTarget = t.Actions.ChassisReset.ActionInfoTarget
 	chassis.SupportedResetTypes = t.Actions.ChassisReset.AllowedResetTypes
 
 	chassis.cables = t.Links.Cables.ToStrings()
@@ -572,14 +575,6 @@ func (chassis *Chassis) UnmarshalJSON(b []byte) error {
 
 // Update commits updates to this object's properties to the running system.
 func (chassis *Chassis) Update() error {
-	// Get a representation of the object's original state so we can find what
-	// to update.
-	original := new(Chassis)
-	err := original.UnmarshalJSON(chassis.RawData)
-	if err != nil {
-		return err
-	}
-
 	readWriteFields := []string{
 		"AssetTag",
 		"IndicatorLED",
@@ -591,10 +586,7 @@ func (chassis *Chassis) Update() error {
 		"LocationIndicatorActive",
 	}
 
-	originalElement := reflect.ValueOf(original).Elem()
-	currentElement := reflect.ValueOf(chassis).Elem()
-
-	return chassis.Entity.Update(originalElement, currentElement, readWriteFields)
+	return chassis.UpdateFromRawData(chassis, chassis.RawData, readWriteFields)
 }
 
 // GetChassis will get a Chassis instance from the Redfish service.
@@ -816,6 +808,9 @@ func (chassis *Chassis) Switches() ([]*Switch, error) {
 
 // NetworkAdapters gets the collection of network adapters of this chassis
 func (chassis *Chassis) NetworkAdapters() ([]*NetworkAdapter, error) {
+	if chassis.networkAdapters == "" {
+		return nil, nil
+	}
 	return ListReferencedNetworkAdapter(chassis.GetClient(), chassis.networkAdapters)
 }
 
@@ -829,6 +824,42 @@ func (chassis *Chassis) LogServices() ([]*LogService, error) {
 // It also provides access to the original data for the assembly.
 func (chassis *Chassis) Assembly() (*Assembly, error) {
 	return GetAssembly(chassis.GetClient(), chassis.assembly)
+}
+
+// GetSupportedResetTypes returns any reset types that the Chassis declares as supported
+// via either ActionInfo or AllowableValues.
+func (chassis *Chassis) GetSupportedResetTypes() ([]ResetType, error) {
+	if len(chassis.SupportedResetTypes) > 0 {
+		return chassis.SupportedResetTypes, nil
+	}
+
+	// if we don't have ResetTypes, try to get from ActionInfo
+	if chassis.resetActionInfoTarget != "" {
+		resetActionInfo, err := chassis.ResetActionInfo()
+		if err != nil {
+			return nil, err
+		}
+
+		vals, err := resetActionInfo.GetParamValues("ResetType", StringActionInfoDataTypes)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, val := range vals {
+			chassis.SupportedResetTypes = append(chassis.SupportedResetTypes, ResetType(val))
+		}
+	}
+
+	return chassis.SupportedResetTypes, nil
+}
+
+// ResetActionInfo returns the ActionInfo for the Chassis reset action if supported
+func (chassis *Chassis) ResetActionInfo() (*ActionInfo, error) {
+	if chassis.resetActionInfoTarget == "" {
+		return nil, errors.New("Chassis Reset resetActionInfoTarget not supported")
+	}
+
+	return common.GetObject[ActionInfo](chassis.GetClient(), chassis.resetActionInfoTarget)
 }
 
 // Reset shall reset the chassis. This action shall not reset Systems or other
@@ -859,11 +890,11 @@ func (chassis *Chassis) Reset(resetType ResetType) error {
 	return chassis.Post(chassis.resetTarget, t)
 }
 
-// LeakDetectors gets the leak detectors for this chassis.
-func (chassis *Chassis) LeakDetectors() (*LeakDetector, error) {
+// LeakDetectors gets the collection of leak detectors for this chassis.
+func (chassis *Chassis) LeakDetectors() ([]*LeakDetector, error) {
 	if chassis.leakdetectors == "" {
 		return nil, nil
 	}
 
-	return GetLeakDetector(chassis.GetClient(), chassis.leakdetectors)
+	return ListReferencedLeakDetectors(chassis.GetClient(), chassis.leakdetectors)
 }
